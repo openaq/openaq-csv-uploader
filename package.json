@@ -4,7 +4,10 @@
   "description": "A csv uploader for OpenAQ data",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Shame, shame. No tests yet!\"",
+    "start": "node index.js",
+    "lint": "eslint .",
+    "docker": "docker-compose --project openaq run --rm uploader"
   },
   "repository": {
     "type": "git",
