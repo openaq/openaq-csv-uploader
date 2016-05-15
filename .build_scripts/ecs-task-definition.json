@@ -1,0 +1,14 @@
+{
+    "family": "openaq-csv-uploader",
+    "containerDefinitions": [
+        {
+            "name": "openaq-csv-uploader",
+            "image": "flasher/openaq-csv-uploader",
+            "memory": 512,
+            "command": [
+                "npm",
+                "start"
+            ]
+        }
+    ]
+}
