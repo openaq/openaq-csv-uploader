@@ -50,6 +50,10 @@ const uploadToS3 = function (file, done) {
     console.error('unable to upload:', err.stack);
     done(err);
   });
+  
+  uploader.on('progress', () => {
+    console.info("progress", uploader.progressMd5Amount, uploader.progressAmount, uploader.progressTotal);
+  });
 
   uploader.on('end', () => {
     done(null);
