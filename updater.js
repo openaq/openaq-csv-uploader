@@ -19,6 +19,14 @@ const db = knex(knexConfig);
 // Get our initial start date for handling all data
 const startDate = process.env.START_DATE || '2015-06-01';
 
+// This is a top-level safety mechanism, we'll kill this process after a certain
+// time in case it's hanging.
+const processTimeout = process.env.PROCESS_TIMEOUT || 10 * 60 * 1000; // Kill the process after a certain time in case it hangs
+setTimeout(() => {
+  console.error('Uh oh, process timed out.');
+  process.exit(1);
+}, processTimeout);
+
 /**
  * Upload the data to S3, credentials come from env vars
  *
