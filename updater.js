@@ -9,8 +9,9 @@ import moment from 'moment';
 import knexConfig from './knexfile';
 import knex from 'knex';
 import csv from 'csv-stringify';
-import { writeFile, unlinkSync } from 'fs';
+import { unlinkSync, createWriteStream } from 'fs';
 import { series } from 'async';
+import through2 from 'through2';
 
 // Create client, utilizing local env vars for AWS
 const client = s3.createClient();
@@ -50,9 +51,12 @@ const uploadToS3 = function (file, done) {
     console.error('unable to upload:', err.stack);
     done(err);
   });
-  
+
   uploader.on('progress', () => {
-    console.info("progress", uploader.progressMd5Amount, uploader.progressAmount, uploader.progressTotal);
+    const percent = parseInt((uploader.progressAmount / uploader.progressTotal) * 100);
+    if (percent % 10 === 0) {
+      console.info(`Upload percentage: ${percent}%`);
+    }
   });
 
   uploader.on('end', () => {
@@ -61,16 +65,30 @@ const uploadToS3 = function (file, done) {
 };
 
 /**
- * Convert our JSON data into a CSV
+ * Get all the data for the day from the database, convert to CSV and upload.
  *
  */
-const convertToCSV = function (results, done) {
-  const options = {
-    header: true,
-    columns: ['location', 'city', 'country', 'utc', 'local', 'parameter', 'value', 'unit', 'latitude', 'longitude', 'attribution']
-  };
-  results = results.map((r) => {
-    const data = Object.assign({}, r.data);
+const getAndUploadData = function (date, cb) {
+  let processed = 0;
+
+  let yesterday = moment().utc().subtract(1, 'day');
+  if (date) {
+    yesterday = date.utc().subtract(1, 'day');
+  }
+  console.info(`Grabbing data for ${yesterday.format('YYYY-MM-DD')}`);
+
+  // Stream from database
+  let stream = db.select('data')
+    .from('measurements')
+    .whereBetween('date_utc', [yesterday.startOf('day').toISOString(), yesterday.endOf('day').toISOString()])
+    .stream({timeout: 0});
+  stream.on('error', (err) => {
+    return cb(err);
+  });
+
+  // Transform stream to clean up data before CSV generation
+  const transform = (chunk, enc, cb) => {
+    const data = Object.assign({}, chunk.data);
 
     // Handle date
     data.utc = data.date.utc;
@@ -84,73 +102,53 @@ const convertToCSV = function (results, done) {
       delete data.coordinates;
     }
 
-    return data;
-  });
-
-  csv(results, options, (err, data) => {
-    if (err) {
-      done(err);
+    // Print out a counter
+    processed++;
+    if (processed % 10000 === 0) {
+      console.info(`Processed ${processed} records.`);
     }
+    cb(null, data);
+  };
 
-    done(null, data);
+  // CSV stringifier
+  const options = {
+    header: true,
+    columns: ['location', 'city', 'country', 'utc', 'local', 'parameter', 'value', 'unit', 'latitude', 'longitude', 'attribution']
+  };
+  let stringifier = csv(options);
+  stringifier.on('error', (err) => {
+    return cb(err);
   });
-};
 
-/**
- * Get all the data for the day from the database, convert to CSV and upload.
- *
- */
-const getAndUploadData = function (date, cb) {
-  let yesterday = moment().utc().subtract(1, 'day');
-  if (date) {
-    yesterday = date.utc().subtract(1, 'day');
-  }
-  console.info(`Grabbing data for ${yesterday.format('YYYY-MM-DD')}`);
-  db.select('data')
-    .from('measurements')
-    .whereBetween('date_utc', [yesterday.startOf('day').toISOString(), yesterday.endOf('day').toISOString()])
-    .then((results) => {
-      // Check to make sure we have results
-      if (results.length === 0) {
-        console.info(`No results found for ${yesterday.format('YYYY-MM-DD')}`);
-        return cb();
+  // Create writeable file for output
+  const file = `${yesterday.format('YYYY-MM-DD')}.csv`;
+  var wstream = createWriteStream(file);
+  wstream.on('finish', function () {
+    console.log(`File ${file} has been saved to disk.`);
+
+    // Upload to S3
+    uploadToS3(file, (err) => {
+      // Remove generated file to be kind
+      unlinkSync(file);
+
+      if (err) {
+        console.error(err);
+        return cb(err);
       }
 
-      // Convert to CSV
-      console.info(`Found ${results.length} results for ${yesterday.format('YYYY-MM-DD')}`);
-      convertToCSV(results, (err, data) => {
-        if (err) {
-          console.error(err);
-          return cb(err);
-        }
-        // Save data to disk and then upload to S3
-        const file = `${yesterday.format('YYYY-MM-DD')}.csv`;
-        writeFile(file, data, (err) => {
-          if (err) {
-            console.error(err);
-            return cb(err);
-          }
-
-          uploadToS3(file, (err) => {
-            // Remove generated file to be kind
-            unlinkSync(file);
-
-            if (err) {
-              console.error(err);
-              return cb(err);
-            }
-
-            // All done!
-            console.info(`New file uploaded: ${file}`);
-            return cb();
-          });
-        });
-      });
-    })
-    .catch((err) => {
-      console.error(err);
-      return cb(err);
+      // All done!
+      console.info(`New file uploaded to S3: ${file}`);
+      return cb();
     });
+  });
+  wstream.on('error', (err) => {
+    return cb(err);
+  });
+
+  stream
+  .pipe(through2({objectMode: true}, transform))
+  .pipe(stringifier)
+  .pipe(wstream);
 };
 
 // Check if we have `all` arg present and handle initial date accordingly
