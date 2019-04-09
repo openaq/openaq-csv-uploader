@@ -1,3 +1,5 @@
+**Note this project is no longer supported. Daily updates are deprecated in favor of [other methods](https://medium.com/@openaq/how-in-the-world-do-you-access-air-quality-data-older-than-90-days-on-the-openaq-platform-8562df519ecd).**
+
 OpenAQ CSV Uploader
 ===
 
